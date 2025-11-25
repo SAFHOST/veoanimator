@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { store } from '../services/store';
 import { Button } from './Button';
-import { CheckCircle, XCircle } from './Icons';
+import { CheckCircle } from './Icons';
 
 export const Billing: React.FC = () => {
   // Use permissions instead of just "isAdmin"
