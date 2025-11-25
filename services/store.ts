@@ -1,6 +1,6 @@
 
 import { User, Transaction, AppSettings, UserRole } from "../types";
-import { db, auth, googleProvider } from "./firebase";
+import { db, auth, googleProvider } from ".services/firebase";
 import { signInWithPopup, signOut as firebaseSignOut } from "firebase/auth";
 import { 
   doc, 
