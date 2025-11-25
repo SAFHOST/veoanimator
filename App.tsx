@@ -7,7 +7,7 @@ import { UsersList } from './components/Users';
 import { Billing } from './components/Billing';
 import { Settings } from './components/Settings';
 import { LandingPage } from './components/LandingPage';
-import { View, UserRole } from './types';
+import { View } from './types';
 import { store } from './services/store';
 
 const App: React.FC = () => {
@@ -30,7 +30,7 @@ const App: React.FC = () => {
     init();
   }, []);
 
-  // Removed unused parameter completely to satisfy strict TS
+  // Fixed: Removed unused 'role' parameter
   const handleLogin = async () => {
     try {
         await store.loginWithGoogle();

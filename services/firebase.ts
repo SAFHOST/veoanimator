@@ -1,4 +1,5 @@
-import * as firebase from "firebase/app";
+// @ts-ignore
+import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
@@ -28,10 +29,10 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-// If apiKey is missing (e.g. env vars not set yet), init a dummy app so import doesn't crash.
+// Use a dummy config if keys are missing during build time to prevent crash
 const app = firebaseConfig.apiKey 
-  ? firebase.initializeApp(firebaseConfig) 
-  : firebase.initializeApp({ apiKey: "dummy-key", projectId: "dummy-project" }); 
+  ? initializeApp(firebaseConfig) 
+  : initializeApp({ apiKey: "dummy", projectId: "dummy" }); 
 
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();

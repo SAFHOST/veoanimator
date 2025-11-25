@@ -1,6 +1,6 @@
 
 import { User, Transaction, AppSettings, UserRole } from "../types";
-import { db, auth, googleProvider } from ".services/firebase";
+import { db, auth, googleProvider } from "./firebase";
 import { signInWithPopup, signOut as firebaseSignOut } from "firebase/auth";
 import { 
   doc, 
@@ -225,7 +225,7 @@ export const store = {
       return acc;
     }, { free: 0, pro: 0, enterprise: 0 } as Record<string, number>);
 
-    // Mock time-series data (Firestore aggregation is complex for this example)
+    // Mock time-series data
     const userGrowth = [
         { month: 'Jun', count: users.length > 10 ? Math.floor(users.length * 0.2) : 2 },
         { month: 'Jul', count: users.length > 10 ? Math.floor(users.length * 0.4) : 5 },
