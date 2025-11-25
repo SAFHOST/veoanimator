@@ -30,7 +30,7 @@ const App: React.FC = () => {
     init();
   }, []);
 
-  const handleLogin = async (role: UserRole) => {
+  const handleLogin = async (_role: UserRole) => {
     // Role param is deprecated in Firebase flow, handled by store.loginWithGoogle
     try {
         await store.loginWithGoogle();

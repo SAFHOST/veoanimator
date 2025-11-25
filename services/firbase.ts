@@ -30,7 +30,6 @@ const firebaseConfig = {
 
 // Initialize Firebase
 // If apiKey is missing (e.g. env vars not set yet), init a dummy app so import doesn't crash.
-// The store.ts service handles connection errors gracefully.
 const app = firebaseConfig.apiKey 
   ? initializeApp(firebaseConfig) 
   : initializeApp({ apiKey: "dummy-key", projectId: "dummy-project" }); 

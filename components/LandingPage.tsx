@@ -1,7 +1,6 @@
 
 import React, { useState } from 'react';
 import { Button } from './Button';
-import { Film, CheckCircle, Users } from './Icons';
 import { UserRole, AppSettings } from '../types';
 
 interface LandingPageProps {
@@ -70,7 +69,6 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, settings }) =
             </Button>
           </div>
           
-           {/* Visuals omitted for brevity, same as before */}
            <div className="mt-20 relative mx-auto max-w-5xl h-64"></div>
         </div>
       </div>
