@@ -1,9 +1,18 @@
 
 import { User, Transaction, AppSettings, UserRole } from "../types";
+import { db, auth, googleProvider } from "./firebase";
+import { signInWithPopup, signOut as firebaseSignOut } from "firebase/auth";
+import { 
+  doc, 
+  getDoc, 
+  setDoc, 
+  updateDoc, 
+  onSnapshot, 
+  collection, 
+  query, 
+  getDocs 
+} from "firebase/firestore";
 
-const STORAGE_KEY = 'veo_saas_db_v1';
-
-// Permission Configuration
 const PERMISSIONS: Record<UserRole, string[]> = {
   admin: [
     'view_admin_dashboard',
@@ -29,89 +38,9 @@ const PERMISSIONS: Record<UserRole, string[]> = {
   ]
 };
 
-// Default Mock Data
-const defaultUsers: User[] = [
-  {
-    id: '1',
-    name: 'Admin User',
-    email: 'admin@veosaas.com',
-    role: 'admin',
-    plan: 'enterprise',
-    credits: 9999,
-    usedCredits: 12,
-    status: 'active',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Admin'
-  },
-  {
-    id: '2',
-    name: 'Sarah Connor',
-    email: 'sarah@example.com',
-    role: 'user',
-    plan: 'pro',
-    credits: 45,
-    usedCredits: 55,
-    status: 'active',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Sarah'
-  },
-  {
-    id: '3',
-    name: 'John Doe',
-    email: 'john@example.com',
-    role: 'user',
-    plan: 'free',
-    credits: 2,
-    usedCredits: 3,
-    status: 'active',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=John'
-  },
-  {
-    id: '4',
-    name: 'Jane Smith',
-    email: 'jane@example.com',
-    role: 'user',
-    plan: 'free',
-    credits: 0,
-    usedCredits: 5,
-    status: 'suspended',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Jane'
-  },
-  {
-    id: '5',
-    name: 'Eddie Editor',
-    email: 'editor@veosaas.com',
-    role: 'editor',
-    plan: 'enterprise',
-    credits: 500,
-    usedCredits: 20,
-    status: 'active',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Eddie'
-  },
-  {
-    id: '6',
-    name: 'Victor Viewer',
-    email: 'viewer@veosaas.com',
-    role: 'viewer',
-    plan: 'free',
-    credits: 0,
-    usedCredits: 0,
-    status: 'active',
-    avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Victor'
-  }
-];
-
-const defaultTransactions: Transaction[] = [
-  { id: 'tx_1', userId: '2', amount: 49.00, date: '2023-10-01', status: 'completed', method: 'Stripe' },
-  { id: 'tx_2', userId: '3', amount: 0.00, date: '2023-10-02', status: 'completed', method: 'Free Trial' },
-  { id: 'tx_3', userId: '2', amount: 49.00, date: '2023-11-01', status: 'completed', method: 'Stripe' },
-  { id: 'tx_4', userId: '4', amount: 9.00, date: '2023-11-05', status: 'failed', method: 'PayPal' },
-];
-
 const defaultSettings: AppSettings = {
   appName: 'Veo Animator SaaS',
-  branding: {
-    logo: null,
-    favicon: null
-  },
+  branding: { logo: null, favicon: null },
   apiKeys: {
     googleGenAI: { key: '', enabled: false },
     veo: { key: '', enabled: false }
@@ -124,144 +53,163 @@ const defaultSettings: AppSettings = {
   }
 };
 
-// State Variables
+// In-Memory Cache
 let users: User[] = [];
 let transactions: Transaction[] = [];
 let settings: AppSettings = defaultSettings;
+let currentUser: User | null = null;
+let initialized = false;
 
-// Helper: Save to LocalStorage
-const persist = () => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      users,
-      transactions,
-      settings
-    }));
-  } catch (e) {
-    console.error("Failed to save to localStorage", e);
-  }
-};
-
-// Helper: Load from LocalStorage
-const initializeStore = () => {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      const data = JSON.parse(stored);
-      users = data.users || defaultUsers;
-      transactions = data.transactions || defaultTransactions;
-      // Merge settings to ensure structure integrity if schema changes
-      settings = { 
-        ...defaultSettings, 
-        ...data.settings,
-        paymentMethods: { ...defaultSettings.paymentMethods, ...(data.settings?.paymentMethods || {}) },
-        branding: { ...defaultSettings.branding, ...(data.settings?.branding || {}) },
-        apiKeys: { 
-          ...defaultSettings.apiKeys, 
-          ...(data.settings?.apiKeys || {}),
-          // Deep merge for specific keys to be safe
-          googleGenAI: { ...defaultSettings.apiKeys.googleGenAI, ...(data.settings?.apiKeys?.googleGenAI || {}) },
-          veo: { ...defaultSettings.apiKeys.veo, ...(data.settings?.apiKeys?.veo || {}) }
-        }
-      };
+// Helpers to sync data
+const fetchSettings = async () => {
+    const docRef = doc(db, "config", "appSettings");
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+        const data = snap.data();
+        settings = { 
+            ...defaultSettings, 
+            ...data, 
+            // Deep merge objects to prevent overwriting with partial data
+            apiKeys: { ...defaultSettings.apiKeys, ...(data.apiKeys || {}) },
+            branding: { ...defaultSettings.branding, ...(data.branding || {}) }
+        } as AppSettings;
     } else {
-      users = [...defaultUsers];
-      transactions = [...defaultTransactions];
-      settings = { ...defaultSettings };
+        // Initialize DB with defaults
+        await setDoc(docRef, defaultSettings);
     }
-  } catch (e) {
-    console.error("Failed to load from localStorage", e);
-    users = [...defaultUsers];
-    transactions = [...defaultTransactions];
-    settings = { ...defaultSettings };
-  }
 };
 
-// Initialize on module load
-initializeStore();
+const fetchUsers = async () => {
+    const q = query(collection(db, "users"));
+    const querySnapshot = await getDocs(q);
+    users = [];
+    querySnapshot.forEach((doc) => {
+        users.push(doc.data() as User);
+    });
+};
 
-// Session State
-let currentUserId: string | null = null;
-
-// Actions
 export const store = {
-  getUsers: () => [...users],
-  
-  getUser: (id: string) => users.find(u => u.id === id),
-  
-  updateUser: (id: string, data: Partial<User>) => {
-    users = users.map(u => u.id === id ? { ...u, ...data } : u);
-    persist();
-    return users.find(u => u.id === id);
-  },
-
-  // Auth Methods
-  login: (role: UserRole) => {
-    // Find first user with matching role
-    const user = users.find(u => u.role === role);
-    if (user) {
-      currentUserId = user.id;
-      return user;
+  // --- Initialization ---
+  init: async () => {
+    if (initialized) return;
+    try {
+        await fetchSettings();
+        await fetchUsers();
+        initialized = true;
+    } catch (e) {
+        console.warn("Firebase connection failed or not configured. Using empty state.", e);
+        initialized = true; // Prevent infinite loading loops
     }
-    return null;
   },
 
-  logout: () => {
-    currentUserId = null;
+  // --- Auth ---
+  loginWithGoogle: async (): Promise<UserRole | null> => {
+    try {
+        const result = await signInWithPopup(auth, googleProvider);
+        const fbUser = result.user;
+        
+        // Check if user exists in our DB
+        const userRef = doc(db, "users", fbUser.uid);
+        const userSnap = await getDoc(userRef);
+
+        if (userSnap.exists()) {
+            currentUser = userSnap.data() as User;
+            return currentUser.role;
+        } else {
+            // Register new user
+            // HACK: First user is Admin, others are User
+            const isFirstUser = users.length === 0;
+            const newUser: User = {
+                id: fbUser.uid,
+                name: fbUser.displayName || 'Unknown',
+                email: fbUser.email || '',
+                role: isFirstUser ? 'admin' : 'user',
+                plan: 'free',
+                credits: 5, // Free trial credits
+                usedCredits: 0,
+                status: 'active',
+                avatar: fbUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${fbUser.uid}`
+            };
+            
+            await setDoc(userRef, newUser);
+            users.push(newUser);
+            currentUser = newUser;
+            return newUser.role;
+        }
+    } catch (error) {
+        console.error("Login failed", error);
+        throw error;
+    }
   },
 
-  getCurrentUser: () => {
-    return users.find(u => u.id === currentUserId);
+  logout: async () => {
+    await firebaseSignOut(auth);
+    currentUser = null;
+  },
+
+  // --- Data Access (Sync Reads, Async Writes) ---
+
+  getCurrentUser: () => currentUser,
+
+  getUsers: () => [...users],
+
+  getUser: (id: string) => users.find(u => u.id === id),
+
+  updateUser: async (id: string, data: Partial<User>) => {
+    // Optimistic Update
+    users = users.map(u => u.id === id ? { ...u, ...data } : u);
+    if (currentUser?.id === id) {
+        currentUser = { ...currentUser, ...data };
+    }
+    
+    // DB Update
+    const userRef = doc(db, "users", id);
+    await updateDoc(userRef, data);
   },
 
   hasPermission: (permission: string): boolean => {
-    if (!currentUserId) return false;
-    const user = users.find(u => u.id === currentUserId);
-    if (!user) return false;
-    return PERMISSIONS[user.role]?.includes(permission) || false;
+    if (!currentUser) return false;
+    return PERMISSIONS[currentUser.role]?.includes(permission) || false;
   },
 
-  deductCredit: (userId: string) => {
-    users = users.map(u => {
-      if (u.id === userId) {
-        return { ...u, credits: u.credits - 1, usedCredits: u.usedCredits + 1 };
-      }
-      return u;
-    });
-    persist();
-  },
-
-  hasCredits: (userId: string) => {
+  deductCredit: async (userId: string) => {
     const user = users.find(u => u.id === userId);
-    return user && user.credits > 0;
+    if (user) {
+        const newData = { 
+            credits: Math.max(0, user.credits - 1), 
+            usedCredits: user.usedCredits + 1 
+        };
+        // Optimistic
+        users = users.map(u => u.id === userId ? { ...u, ...newData } : u);
+        if (currentUser?.id === userId) {
+            currentUser = { ...currentUser, ...newData };
+        }
+        // DB
+        await updateDoc(doc(db, "users", userId), newData);
+    }
   },
 
   getTransactions: () => [...transactions],
 
   getSettings: () => ({ ...settings }),
 
-  updateSettings: (newSettings: Partial<AppSettings>) => {
-    settings = { 
+  updateSettings: async (newSettings: Partial<AppSettings>) => {
+     // Optimistic
+     settings = { 
         ...settings, 
         ...newSettings,
-        branding: {
-            ...settings.branding,
-            ...(newSettings.branding || {})
-        },
-        paymentMethods: {
-            ...settings.paymentMethods,
-            ...(newSettings.paymentMethods || {})
-        },
-        apiKeys: {
-          ...settings.apiKeys,
-          ...(newSettings.apiKeys || {})
-        }
-    };
-    persist();
-    return settings;
+        apiKeys: { ...settings.apiKeys, ...(newSettings.apiKeys || {}) },
+        branding: { ...settings.branding, ...(newSettings.branding || {}) },
+        paymentMethods: { ...settings.paymentMethods, ...(newSettings.paymentMethods || {}) }
+     };
+
+     // DB
+     await setDoc(doc(db, "config", "appSettings"), settings);
+     return settings;
   },
 
   getStats: () => {
+    // Simple calculations based on memory
     const totalRevenue = transactions.filter(t => t.status === 'completed').reduce((acc, curr) => acc + curr.amount, 0);
     const totalGenerations = users.reduce((acc, curr) => acc + curr.usedCredits, 0);
     return {
@@ -273,37 +221,28 @@ export const store = {
   },
 
   getAnalytics: () => {
-    // Generations by Plan
     const generationsByPlan = users.reduce((acc, user) => {
       acc[user.plan] = (acc[user.plan] || 0) + user.usedCredits;
       return acc;
     }, { free: 0, pro: 0, enterprise: 0 } as Record<string, number>);
 
-    // User Growth Trend (Mock 6 months)
+    // Mock time-series data (Firestore aggregation is complex for this example)
     const userGrowth = [
-        { month: 'Jun', count: 12 },
-        { month: 'Jul', count: 18 },
-        { month: 'Aug', count: 35 },
-        { month: 'Sep', count: 50 },
-        { month: 'Oct', count: 85 },
-        { month: 'Nov', count: 120 }
-    ];
-
-    // Weekly Activity
-    const activity = [
-        { day: 'Mon', value: 45 },
-        { day: 'Tue', value: 52 },
-        { day: 'Wed', value: 38 },
-        { day: 'Thu', value: 65 },
-        { day: 'Fri', value: 48 },
-        { day: 'Sat', value: 20 },
-        { day: 'Sun', value: 15 }
+        { month: 'Jun', count: users.length > 10 ? Math.floor(users.length * 0.2) : 2 },
+        { month: 'Jul', count: users.length > 10 ? Math.floor(users.length * 0.4) : 5 },
+        { month: 'Aug', count: users.length > 10 ? Math.floor(users.length * 0.6) : 8 },
+        { month: 'Sep', count: users.length > 10 ? Math.floor(users.length * 0.8) : 10 },
+        { month: 'Oct', count: users.length },
     ];
 
     return {
         generationsByPlan,
         userGrowth,
-        activity
+        activity: [
+            { day: 'Mon', value: 45 }, { day: 'Tue', value: 52 }, { day: 'Wed', value: 38 },
+            { day: 'Thu', value: 65 }, { day: 'Fri', value: 48 }, { day: 'Sat', value: 20 },
+            { day: 'Sun', value: 15 }
+        ]
     };
   }
 };

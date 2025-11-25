@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { VeoGenerator } from './components/VeoGenerator';
@@ -10,19 +11,38 @@ import { View, UserRole } from './types';
 import { store } from './services/store';
 
 const App: React.FC = () => {
+  const [isInitializing, setIsInitializing] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [appSettings, setAppSettings] = useState(store.getSettings());
 
-  const handleLogin = (role: UserRole) => {
-    // Simulate Login
-    store.login(role);
-    setIsAuthenticated(true);
-    setCurrentView('dashboard');
+  // Initialize Data Store (Fetch from Firebase)
+  useEffect(() => {
+    const init = async () => {
+      await store.init();
+      const currentUser = store.getCurrentUser();
+      if (currentUser) {
+        setIsAuthenticated(true);
+      }
+      setAppSettings(store.getSettings());
+      setIsInitializing(false);
+    };
+    init();
+  }, []);
+
+  const handleLogin = async (role: UserRole) => {
+    // Role param is deprecated in Firebase flow, handled by store.loginWithGoogle
+    try {
+        await store.loginWithGoogle();
+        setIsAuthenticated(true);
+        setCurrentView('dashboard');
+    } catch (e) {
+        alert("Login failed. Check console or make sure Firebase is configured.");
+    }
   };
 
-  const handleLogout = () => {
-    store.logout();
+  const handleLogout = async () => {
+    await store.logout();
     setIsAuthenticated(false);
     setCurrentView('dashboard');
   };
@@ -34,7 +54,6 @@ const App: React.FC = () => {
   // Update document title and favicon when settings change
   useEffect(() => {
     document.title = appSettings.appName;
-    
     if (appSettings.branding.favicon) {
        let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
        if (!link) {
@@ -47,7 +66,6 @@ const App: React.FC = () => {
   }, [appSettings]);
 
   const renderContent = () => {
-    // If not authenticated, safety check
     if (!isAuthenticated) return null;
 
     switch (currentView) {
@@ -66,6 +84,15 @@ const App: React.FC = () => {
     }
   };
 
+  if (isInitializing) {
+      return (
+          <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+              <span className="ml-3">Connecting to database...</span>
+          </div>
+      );
+  }
+
   // If not authenticated, show Landing Page
   if (!isAuthenticated) {
     return <LandingPage onLogin={handleLogin} settings={appSettings} />;
@@ -82,7 +109,6 @@ const App: React.FC = () => {
       />
       
       <main className="flex-1 ml-64 min-h-screen relative">
-        {/* Background Gradients */}
         <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden ml-64">
            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-600/5 rounded-full blur-[100px]"></div>
            <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/5 rounded-full blur-[100px]"></div>
