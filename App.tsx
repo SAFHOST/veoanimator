@@ -40,6 +40,9 @@ const App: React.FC = () => {
         setIsAuthenticated(true);
         setCurrentView('dashboard');
     } catch (e: any) {
+        // Ignore if user simply closed the popup
+        if (e.code === 'auth/popup-closed-by-user') return;
+
         console.error("Login detailed error:", e);
         // Show specific error to user
         let message = "Login failed. ";
