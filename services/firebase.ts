@@ -1,10 +1,11 @@
-// services/firebase.ts (or ../firebase.ts depending on location)
+// services/firebase.ts
 
 import { initializeApp } from "firebase/app";
 import {
   getAuth,
   GoogleAuthProvider,
-  signInWithPopup,
+  setPersistence,
+  browserLocalPersistence,
 } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
@@ -20,10 +21,13 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 
-// ✅ these three are used in store.ts
+// Auth with LOCAL persistence (survives reload)
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider();
-export const db = getFirestore(app);
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.error("Failed to set auth persistence:", err);
+});
 
-// ✅ this one is used in LandingPage.tsx
-export const loginWithGoogle = () => signInWithPopup(auth, googleProvider);
+export const googleProvider = new GoogleAuthProvider();
+
+// Firestore
+export const db = getFirestore(app);
