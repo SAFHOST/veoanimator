@@ -3,21 +3,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// Safe environment variable access helper
-const getEnv = (key: string) => {
-  const meta = import.meta as any;
-  // Check if import.meta.env exists (Vite standard)
-  if (meta && meta.env && meta.env[key]) {
-    return meta.env[key];
-  }
-  // Check process.env (Fallback if defined via Vite config)
-  // @ts-ignore
-  if (typeof process !== 'undefined' && process.env && process.env[key]) {
-    // @ts-ignore
-    return process.env[key];
-  }
-  return "";
-};
+
 
 // For Firebase JS SDK v7.20.0 and later, measurementId is optional
 const firebaseConfig = {
