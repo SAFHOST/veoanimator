@@ -101,47 +101,49 @@ const fetchUsers = async () => {
 };
 
 export const store = {
-  // --- Initialization ---
+    // --- Initialization ---
   init: () => new Promise<void>((resolve) => {
     if (initialized) return resolve();
-    
-    // OPTIMIZATION: Run fetchSettings and Auth Check in PARALLEL
-    const settingsPromise = fetchSettings();
-    
-    const authPromise = new Promise<void>((resolveAuth) => {
-        // Fix: Removed 'const unsubscribe =' to avoid TS6133 unused variable error
-        onAuthStateChanged(auth, async (firebaseUser) => {
-            if (firebaseUser) {
-                // User is logged in, fetch their profile
-                const userRef = doc(db, "users", firebaseUser.uid);
-                try {
-                    const snap = await getDoc(userRef);
-                    if (snap.exists()) {
-                        currentUser = snap.data() as User;
-                        
-                        // Only fetch ALL users if the logged-in user is Admin/Staff
-                        if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
-                            await fetchUsers();
-                        } else {
-                            users = [currentUser];
-                        }
-                    }
-                } catch (e) {
-                    console.error("Error fetching user profile", e);
-                }
-            } else {
-                currentUser = null;
-            }
-            resolveAuth();
-        });
+
+    // Start loading settings in the background.
+    // UI will use defaultSettings immediately and update later.
+    fetchSettings().catch((err) => {
+      console.warn("Failed to preload settings (using defaults):", err);
     });
 
-    // Wait for both to finish (or settings to timeout) before rendering app
-    Promise.all([settingsPromise, authPromise]).then(() => {
-        initialized = true;
-        resolve();
+    // Only wait for auth state before resolving init
+    const authPromise = new Promise<void>((resolveAuth) => {
+      onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+          const userRef = doc(db, "users", firebaseUser.uid);
+          try {
+            const snap = await getDoc(userRef);
+            if (snap.exists()) {
+              currentUser = snap.data() as User;
+
+              // Only fetch ALL users if the logged-in user is Admin/Staff
+              if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
+                await fetchUsers();
+              } else {
+                users = [currentUser];
+              }
+            }
+          } catch (e) {
+            console.error("Error fetching user profile", e);
+          }
+        } else {
+          currentUser = null;
+        }
+        resolveAuth();
+      });
+    });
+
+    authPromise.then(() => {
+      initialized = true;
+      resolve();
     });
   }),
+
 
   // --- Auth ---
 loginWithGoogle: async (): Promise<UserRole | null> => {
