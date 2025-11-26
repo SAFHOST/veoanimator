@@ -80,8 +80,6 @@ const fetchSettings = async () => {
             } as AppSettings;
         } else {
             // DB is empty or permission denied. Use defaults.
-            // IMPORTANT: Do NOT try to setDoc here if we are a guest. 
-            // Writing requires auth, so attempting it would cause a permission error delay.
             console.log("Using default settings (Remote settings not found or not accessible)");
         }
     } catch (error) {
@@ -98,8 +96,7 @@ const fetchUsers = async () => {
             users.push(doc.data() as User);
         });
     } catch (error) {
-        // This is expected for standard users who don't have permission to list all users
-        // console.warn("Failed to fetch users", error);
+        // Expected for non-admin users
     }
 };
 
@@ -112,7 +109,7 @@ export const store = {
     const settingsPromise = fetchSettings();
     
     const authPromise = new Promise<void>((resolveAuth) => {
-        // Fix: Remove unused 'unsubscribe' variable assignment to prevent TS6133 error
+        // Fix: Removed 'const unsubscribe =' to avoid TS6133 unused variable error
         onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
                 // User is logged in, fetch their profile
@@ -164,7 +161,6 @@ export const store = {
             return currentUser.role;
         } else {
             // Register new user
-            // Check if this is the VERY FIRST user in the database
             let isFirstUser = false;
             try {
                 const q = query(collection(db, "users"), limit(1));
@@ -190,7 +186,6 @@ export const store = {
             users.push(newUser);
             currentUser = newUser;
 
-            // If this is the first user/admin, also initialize the Settings in the DB
             if (isFirstUser) {
                 try {
                     await setDoc(doc(db, "config", "appSettings"), defaultSettings);
