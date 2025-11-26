@@ -1,9 +1,13 @@
-// @ts-ignore
+// services/firebase.ts (or ../firebase.ts depending on location)
+
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
-// Hardcoded configuration from user request
 const firebaseConfig = {
   apiKey: "AIzaSyBeMjk3b7XszitKjsk6XMqvNLpIqIJfLDE",
   authDomain: "gen-lang-client-0969034974.firebaseapp.com",
@@ -11,12 +15,15 @@ const firebaseConfig = {
   storageBucket: "gen-lang-client-0969034974.firebasestorage.app",
   messagingSenderId: "608483629046",
   appId: "1:608483629046:web:28c886f0f00804cc9719d7",
-  measurementId: "G-LS7DE42411"
+  measurementId: "G-LS7DE42411",
 };
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig); 
+const app = initializeApp(firebaseConfig);
 
+// ✅ these three are used in store.ts
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
 export const db = getFirestore(app);
+
+// ✅ this one is used in LandingPage.tsx
+export const loginWithGoogle = () => signInWithPopup(auth, googleProvider);

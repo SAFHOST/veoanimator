@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Button } from './Button';
 import { UserRole, AppSettings } from '../types';
+import { loginWithGoogle } from '../services/firebase'; // ⬅️ ADD THIS LINE
+
 
 interface LandingPageProps {
   onLogin: (role: UserRole) => void;
@@ -9,16 +11,24 @@ interface LandingPageProps {
 
 export const LandingPage: React.FC<LandingPageProps> = ({ onLogin, settings }) => {
   const [isLoading, setIsLoading] = useState(false);
+const handleLoginClick = async () => {
+  setIsLoading(true);
+  try {
+    // Call Firebase Google login
+    const result = await loginWithGoogle();
+    const user = result.user;
+    console.log('Google login success:', user);
 
-  const handleLoginClick = async () => {
-      setIsLoading(true);
-      try {
-          // 'user' is a placeholder, logic is handled by auth provider
-          await onLogin('user'); 
-      } finally {
-          setIsLoading(false);
-      }
-  };
+    // Notify parent that login worked (keep your existing flow)
+    onLogin('user');
+  } catch (error: any) {
+    console.error('Login failed:', error);
+    alert(error.message || 'Login failed');
+  } finally {
+    setIsLoading(false);
+  }
+};
+
 
   return (
     <div className="min-h-screen bg-slate-950 text-white selection:bg-purple-500/30">
