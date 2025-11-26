@@ -200,13 +200,13 @@ export const store = {
           };
 
           try {
-            await setDoc(userRef, newUser);
-          } catch (e) {
-            console.warn(
-              "Firestore write failed (maybe offline), using local user only",
-              e
-            );
-          }
+  await setDoc(userRef, newUser);
+  console.log("✅ Firestore user document created/updated:", fbUser.uid);
+} catch (e) {
+  console.error("❌ Firestore write failed:", e);
+  alert("Firestore write failed: " + (e as any)?.message);
+}
+
 
           users = [newUser];
           currentUser = newUser;
