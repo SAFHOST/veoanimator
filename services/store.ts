@@ -1,7 +1,6 @@
-
 import { User, Transaction, AppSettings, UserRole } from "../types";
 import { db, auth, googleProvider } from "./firebase";
-import { signInWithPopup, signOut as firebaseSignOut } from "firebase/auth";
+import { signInWithPopup, signOut as firebaseSignOut, onAuthStateChanged } from "firebase/auth";
 import { 
   doc, 
   getDoc, 
@@ -9,7 +8,8 @@ import {
   updateDoc, 
   collection, 
   query, 
-  getDocs 
+  getDocs,
+  limit
 } from "firebase/firestore";
 
 const PERMISSIONS: Record<UserRole, string[]> = {
@@ -61,45 +61,78 @@ let initialized = false;
 
 // Helpers to sync data
 const fetchSettings = async () => {
-    const docRef = doc(db, "config", "appSettings");
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-        const data = snap.data();
-        settings = { 
-            ...defaultSettings, 
-            ...data, 
-            // Deep merge objects to prevent overwriting with partial data
-            apiKeys: { ...defaultSettings.apiKeys, ...(data.apiKeys || {}) },
-            branding: { ...defaultSettings.branding, ...(data.branding || {}) }
-        } as AppSettings;
-    } else {
-        // Initialize DB with defaults
-        await setDoc(docRef, defaultSettings);
+    try {
+        const docRef = doc(db, "config", "appSettings");
+        const snap = await getDoc(docRef);
+        if (snap.exists()) {
+            const data = snap.data();
+            settings = { 
+                ...defaultSettings, 
+                ...data, 
+                // Deep merge objects to prevent overwriting with partial data
+                apiKeys: { ...defaultSettings.apiKeys, ...(data.apiKeys || {}) },
+                branding: { ...defaultSettings.branding, ...(data.branding || {}) }
+            } as AppSettings;
+        } else {
+            // Initialize DB with defaults
+            await setDoc(docRef, defaultSettings);
+        }
+    } catch (error) {
+        console.warn("Failed to fetch settings, using defaults", error);
     }
 };
 
 const fetchUsers = async () => {
-    const q = query(collection(db, "users"));
-    const querySnapshot = await getDocs(q);
-    users = [];
-    querySnapshot.forEach((doc) => {
-        users.push(doc.data() as User);
-    });
+    try {
+        const q = query(collection(db, "users"));
+        const querySnapshot = await getDocs(q);
+        users = [];
+        querySnapshot.forEach((doc) => {
+            users.push(doc.data() as User);
+        });
+    } catch (error) {
+        console.warn("Failed to fetch users", error);
+    }
 };
 
 export const store = {
   // --- Initialization ---
-  init: async () => {
-    if (initialized) return;
-    try {
-        await fetchSettings();
-        await fetchUsers();
-        initialized = true;
-    } catch (e) {
-        console.warn("Firebase connection failed or not configured. Using empty state.", e);
-        initialized = true; // Prevent infinite loading loops
-    }
-  },
+  init: () => new Promise<void>((resolve) => {
+    if (initialized) return resolve();
+    
+    // 1. Fetch Settings First (Fast, needed for branding)
+    fetchSettings().then(() => {
+        // 2. Listen for Auth State
+        onAuthStateChanged(auth, async (firebaseUser) => {
+            if (firebaseUser) {
+                // User is logged in, fetch their profile
+                const userRef = doc(db, "users", firebaseUser.uid);
+                try {
+                    const snap = await getDoc(userRef);
+                    if (snap.exists()) {
+                        currentUser = snap.data() as User;
+                        
+                        // Optimization: Only fetch ALL users if the logged-in user is Admin/Staff
+                        // This prevents downloading the whole DB for standard users
+                        if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
+                            await fetchUsers();
+                        } else {
+                            // For standard users, just populate the cache with themselves so 'getUsers' doesn't crash
+                            users = [currentUser];
+                        }
+                    }
+                } catch (e) {
+                    console.error("Error fetching user profile", e);
+                }
+            } else {
+                currentUser = null;
+            }
+            
+            initialized = true;
+            resolve();
+        });
+    });
+  }),
 
   // --- Auth ---
   loginWithGoogle: async (): Promise<UserRole | null> => {
@@ -113,16 +146,25 @@ export const store = {
 
         if (userSnap.exists()) {
             currentUser = userSnap.data() as User;
+            // If they are admin, fetch the rest of the users now
+            if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
+                await fetchUsers();
+            }
             return currentUser.role;
         } else {
             // Register new user
-            // HACK: First user is Admin, others are User
-            const isFirstUser = users.length === 0;
+            
+            // SECURITY FIX: Check DB directly if any users exist.
+            // (Memory cache 'users' might be empty if we loaded as guest)
+            const q = query(collection(db, "users"), limit(1));
+            const snapshot = await getDocs(q);
+            const isFirstUser = snapshot.empty;
+            
             const newUser: User = {
                 id: fbUser.uid,
                 name: fbUser.displayName || 'Unknown',
                 email: fbUser.email || '',
-                role: isFirstUser ? 'admin' : 'user',
+                role: isFirstUser ? 'admin' : 'user', // First ever user is admin
                 plan: 'free',
                 credits: 5, // Free trial credits
                 usedCredits: 0,
@@ -144,6 +186,10 @@ export const store = {
   logout: async () => {
     await firebaseSignOut(auth);
     currentUser = null;
+    // Clear sensitive data from memory on logout
+    if (!['admin', 'editor', 'viewer'].includes(currentUser?.role || '')) {
+        users = [];
+    }
   },
 
   // --- Data Access (Sync Reads, Async Writes) ---
