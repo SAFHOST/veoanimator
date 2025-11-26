@@ -112,7 +112,8 @@ export const store = {
     const settingsPromise = fetchSettings();
     
     const authPromise = new Promise<void>((resolveAuth) => {
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+        // Fix: Remove unused 'unsubscribe' variable assignment to prevent TS6133 error
+        onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
                 // User is logged in, fetch their profile
                 const userRef = doc(db, "users", firebaseUser.uid);
