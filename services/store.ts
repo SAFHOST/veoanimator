@@ -62,8 +62,9 @@ let initialized = false;
 // Helpers to sync data
 const fetchSettings = async () => {
     try {
-        // Add a timeout to prevent hanging if DB is slow
-        const timeout = new Promise((_, reject) => setTimeout(() => reject("Timeout"), 3000));
+        // TIMEOUT SAFETY: If Firestore is blocked or slow, fail fast (2 seconds)
+        // so the user isn't stuck on "Connecting..." forever.
+        const timeout = new Promise((_, reject) => setTimeout(() => reject("Timeout"), 2000));
         const fetch = getDoc(doc(db, "config", "appSettings"));
         
         const snap: any = await Promise.race([fetch, timeout]);
@@ -73,16 +74,18 @@ const fetchSettings = async () => {
             settings = { 
                 ...defaultSettings, 
                 ...data, 
-                // Deep merge objects to prevent overwriting with partial data
                 apiKeys: { ...defaultSettings.apiKeys, ...(data.apiKeys || {}) },
-                branding: { ...defaultSettings.branding, ...(data.branding || {}) }
+                branding: { ...defaultSettings.branding, ...(data.branding || {}) },
+                paymentMethods: { ...defaultSettings.paymentMethods, ...(data.paymentMethods || {}) }
             } as AppSettings;
-        } else if (snap) {
-            // Initialize DB with defaults if doc is missing
-            await setDoc(doc(db, "config", "appSettings"), defaultSettings);
+        } else {
+            // DB is empty or permission denied. Use defaults.
+            // IMPORTANT: Do NOT try to setDoc here if we are a guest. 
+            // Writing requires auth, so attempting it would cause a permission error delay.
+            console.log("Using default settings (Remote settings not found or not accessible)");
         }
     } catch (error) {
-        console.warn("Settings fetch skipped or failed (using defaults):", error);
+        console.warn("Using default settings due to error:", error);
     }
 };
 
@@ -95,7 +98,8 @@ const fetchUsers = async () => {
             users.push(doc.data() as User);
         });
     } catch (error) {
-        console.warn("Failed to fetch users", error);
+        // This is expected for standard users who don't have permission to list all users
+        // console.warn("Failed to fetch users", error);
     }
 };
 
@@ -108,7 +112,6 @@ export const store = {
     const settingsPromise = fetchSettings();
     
     const authPromise = new Promise<void>((resolveAuth) => {
-        // onAuthStateChanged fires immediately with current state
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
                 // User is logged in, fetch their profile
@@ -118,7 +121,7 @@ export const store = {
                     if (snap.exists()) {
                         currentUser = snap.data() as User;
                         
-                        // Optimization: Only fetch ALL users if the logged-in user is Admin/Staff
+                        // Only fetch ALL users if the logged-in user is Admin/Staff
                         if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
                             await fetchUsers();
                         } else {
@@ -160,9 +163,15 @@ export const store = {
             return currentUser.role;
         } else {
             // Register new user
-            const q = query(collection(db, "users"), limit(1));
-            const snapshot = await getDocs(q);
-            const isFirstUser = snapshot.empty;
+            // Check if this is the VERY FIRST user in the database
+            let isFirstUser = false;
+            try {
+                const q = query(collection(db, "users"), limit(1));
+                const snapshot = await getDocs(q);
+                isFirstUser = snapshot.empty;
+            } catch (e) {
+                console.warn("Could not check for other users, defaulting to 'user' role");
+            }
             
             const newUser: User = {
                 id: fbUser.uid,
@@ -179,6 +188,17 @@ export const store = {
             await setDoc(userRef, newUser);
             users.push(newUser);
             currentUser = newUser;
+
+            // If this is the first user/admin, also initialize the Settings in the DB
+            if (isFirstUser) {
+                try {
+                    await setDoc(doc(db, "config", "appSettings"), defaultSettings);
+                    settings = defaultSettings;
+                } catch (e) {
+                    console.warn("Failed to initialize remote settings", e);
+                }
+            }
+
             return newUser.role;
         }
     } catch (error) {
@@ -187,13 +207,10 @@ export const store = {
   },
 
   logout: async () => {
-    // Capture role BEFORE setting currentUser to null to avoid TypeScript error
     const role = currentUser?.role;
-
     await firebaseSignOut(auth);
     currentUser = null;
     
-    // Clear sensitive data from memory on logout using captured role
     if (!['admin', 'editor', 'viewer'].includes(role || '')) {
         users = [];
     }
