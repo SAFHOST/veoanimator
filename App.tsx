@@ -12,51 +12,66 @@ import { store } from './services/store';
 const App: React.FC = () => {
   const [isInitializing, setIsInitializing] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [appSettings, setAppSettings] = useState(store.getSettings());
 
-  // Initialize Data Store (Fetch from Firebase)
+  // Initialize data store on mount
   useEffect(() => {
     const init = async () => {
       try {
         await store.init();
         const currentUser = store.getCurrentUser();
         if (currentUser) {
-            setIsAuthenticated(true);
+          setIsAuthenticated(true);
         }
         setAppSettings(store.getSettings());
       } catch (error) {
-        console.error("Initialization error:", error);
+        console.error('Initialization error:', error);
       } finally {
         setIsInitializing(false);
       }
     };
+
     init();
   }, []);
 
-  const handleLogin = async () => {
-    try {
-        await store.loginWithGoogle();
-        setIsAuthenticated(true);
-        setCurrentView('dashboard');
-    } catch (e: any) {
-        // Ignore if user simply closed the popup
-        if (e.code === 'auth/popup-closed-by-user') return;
+  const handleLogin = () => {
+    setIsLoggingIn(true);
 
-        console.error("Login detailed error:", e);
-        // Show specific error to user
-        let message = "Login failed. ";
-        if (e.code === 'auth/unauthorized-domain') {
-            message += "This domain is not authorized in Firebase Console. Please add it to Authentication > Settings > Authorized Domains.";
-        } else if (e.code === 'auth/configuration-not-found') {
-            message += "Firebase configuration is missing. Check your Vercel Environment Variables.";
-        } else if (e.message) {
+    // Defer heavy work off the click event for better INP
+    setTimeout(() => {
+      store
+        .loginWithGoogle()
+        .then(() => {
+          setIsAuthenticated(true);
+          setCurrentView('dashboard');
+          setAppSettings(store.getSettings());
+        })
+        .catch((e: any) => {
+          if (e?.code === 'auth/popup-closed-by-user') return;
+
+          console.error('Login detailed error:', e);
+          let message = 'Login failed. ';
+
+          if (e?.code === 'auth/unauthorized-domain') {
+            message +=
+              'This domain is not authorized in Firebase. Please add it to Authentication > Settings > Authorized Domains.';
+          } else if (e?.code === 'auth/configuration-not-found') {
+            message +=
+              'Firebase configuration is missing. Check your Vercel Environment Variables.';
+          } else if (e?.message) {
             message += e.message;
-        } else {
-            message += "Check console for details.";
-        }
-        alert(message);
-    }
+          } else {
+            message += 'Check console for details.';
+          }
+
+          alert(message);
+        })
+        .finally(() => {
+          setIsLoggingIn(false);
+        });
+    }, 0);
   };
 
   const handleLogout = async () => {
@@ -73,13 +88,15 @@ const App: React.FC = () => {
   useEffect(() => {
     document.title = appSettings.appName;
     if (appSettings.branding.favicon) {
-       let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement;
-       if (!link) {
-           link = document.createElement('link');
-           link.rel = 'icon';
-           document.head.appendChild(link);
-       }
-       link.href = appSettings.branding.favicon;
+      let link = document.querySelector(
+        "link[rel~='icon']"
+      ) as HTMLLinkElement | null;
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+      link.href = appSettings.branding.favicon;
     }
   }, [appSettings]);
 
@@ -102,44 +119,53 @@ const App: React.FC = () => {
     }
   };
 
+  // Initial loading screen
   if (isInitializing) {
-      return (
-          <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[100px]"></div>
-              <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[100px]"></div>
-              
-              <div className="relative z-10 flex flex-col items-center">
-                  <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mb-6"></div>
-                  <h2 className="text-xl font-semibold tracking-wide">Initializing App</h2>
-                  <p className="text-slate-500 text-sm mt-2">Connecting to secure database...</p>
-              </div>
-          </div>
-      );
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white relative overflow-hidden">
+        <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[100px]" />
+        <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[100px]" />
+
+        <div className="relative z-10 flex flex-col items-center">
+          <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mb-6" />
+          <h2 className="text-xl font-semibold tracking-wide">Initializing App</h2>
+          <p className="text-slate-500 text-sm mt-2">
+            Connecting to secure database...
+          </p>
+        </div>
+      </div>
+    );
   }
 
-  // If not authenticated, show Landing Page
+  // Not logged in → show landing page
   if (!isAuthenticated) {
-    return <LandingPage onLogin={handleLogin} settings={appSettings} />;
+    return (
+      <LandingPage
+        onLogin={handleLogin}
+        settings={appSettings}
+        isLoading={isLoggingIn}
+      />
+    );
   }
 
-  // If authenticated, show SaaS Dashboard
+  // Logged in → show app
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 font-sans flex">
-      <Sidebar 
-        currentView={currentView} 
-        onChangeView={setCurrentView} 
+      <Sidebar
+        currentView={currentView}
+        onChangeView={setCurrentView}
         onLogout={handleLogout}
         settings={appSettings}
       />
-      
+
       <main className="flex-1 ml-64 min-h-screen relative">
         <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden ml-64">
-           <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-600/5 rounded-full blur-[100px]"></div>
-           <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/5 rounded-full blur-[100px]"></div>
+          <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-600/5 rounded-full blur-[100px]" />
+          <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/5 rounded-full blur-[100px]" />
         </div>
 
         <div className="relative z-10 p-8 max-w-7xl mx-auto">
-           {renderContent()}
+          {renderContent()}
         </div>
       </main>
     </div>
