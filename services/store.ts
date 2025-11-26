@@ -144,63 +144,102 @@ export const store = {
   }),
 
   // --- Auth ---
-  loginWithGoogle: async (): Promise<UserRole | null> => {
+loginWithGoogle: async (): Promise<UserRole | null> => {
+  try {
+    const result = await signInWithPopup(auth, googleProvider);
+    const fbUser = result.user;
+
     try {
-        const result = await signInWithPopup(auth, googleProvider);
-        const fbUser = result.user;
-        
-        // Check if user exists in our DB
-        const userRef = doc(db, "users", fbUser.uid);
-        const userSnap = await getDoc(userRef);
+      // Try to read user from Firestore
+      const userRef = doc(db, "users", fbUser.uid);
+      const userSnap = await getDoc(userRef);
 
-        if (userSnap.exists()) {
-            currentUser = userSnap.data() as User;
-            if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
-                await fetchUsers();
-            }
-            return currentUser.role;
-        } else {
-            // Register new user
-            let isFirstUser = false;
-            try {
-                const q = query(collection(db, "users"), limit(1));
-                const snapshot = await getDocs(q);
-                isFirstUser = snapshot.empty;
-            } catch (e) {
-                console.warn("Could not check for other users, defaulting to 'user' role");
-            }
-            
-            const newUser: User = {
-                id: fbUser.uid,
-                name: fbUser.displayName || 'Unknown',
-                email: fbUser.email || '',
-                role: isFirstUser ? 'admin' : 'user', 
-                plan: 'free',
-                credits: 5,
-                usedCredits: 0,
-                status: 'active',
-                avatar: fbUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${fbUser.uid}`
-            };
-            
-            await setDoc(userRef, newUser);
-            users.push(newUser);
-            currentUser = newUser;
+      if (userSnap.exists()) {
+        currentUser = userSnap.data() as User;
 
-            if (isFirstUser) {
-                try {
-                    await setDoc(doc(db, "config", "appSettings"), defaultSettings);
-                    settings = defaultSettings;
-                } catch (e) {
-                    console.warn("Failed to initialize remote settings", e);
-                }
-            }
-
-            return newUser.role;
+        if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
+          await fetchUsers();
         }
-    } catch (error) {
-        throw error;
+
+        return currentUser.role;
+      } else {
+        // New user flow
+        let isFirstUser = false;
+        try {
+          const q = query(collection(db, "users"), limit(1));
+          const snapshot = await getDocs(q);
+          isFirstUser = snapshot.empty;
+        } catch (e) {
+          console.warn("Could not check for other users, defaulting to 'user' role");
+        }
+
+        const newUser: User = {
+          id: fbUser.uid,
+          name: fbUser.displayName || 'Unknown',
+          email: fbUser.email || '',
+          role: isFirstUser ? 'admin' : 'user',
+          plan: 'free',
+          credits: 5,
+          usedCredits: 0,
+          status: 'active',
+          avatar:
+            fbUser.photoURL ||
+            `https://api.dicebear.com/7.x/avataaars/svg?seed=${fbUser.uid}`,
+        };
+
+        // Try to save to Firestore (may fail if offline)
+        try {
+          const userRef = doc(db, "users", fbUser.uid);
+          await setDoc(userRef, newUser);
+        } catch (e) {
+          console.warn("Firestore write failed (maybe offline), using local user only", e);
+        }
+
+        users.push(newUser);
+        currentUser = newUser;
+
+        // First user → also initialize app settings if possible
+        if (isFirstUser) {
+          try {
+            await setDoc(doc(db, "config", "appSettings"), defaultSettings);
+            settings = defaultSettings;
+          } catch (e) {
+            console.warn("Failed to initialize remote settings", e);
+          }
+        }
+
+        return newUser.role;
+      }
+    } catch (e: any) {
+      // Firestore completely unreachable
+      console.error("Firestore user lookup failed, treating as local-only user:", e);
+
+      const fallbackUser: User = {
+        id: fbUser.uid,
+        name: fbUser.displayName || 'Unknown',
+        email: fbUser.email || '',
+        role: 'user',
+        plan: 'free',
+        credits: 5,
+        usedCredits: 0,
+        status: 'active',
+        avatar:
+          fbUser.photoURL ||
+          `https://api.dicebear.com/7.x/avataaars/svg?seed=${fbUser.uid}`,
+      };
+
+      currentUser = fallbackUser;
+      users = [fallbackUser];
+
+      // IMPORTANT: do NOT rethrow here – login still “succeeds”
+      return fallbackUser.role;
     }
-  },
+  } catch (error) {
+    // Only auth errors are thrown out to the UI
+    throw error;
+  }
+},
+
 
   logout: async () => {
     const role = currentUser?.role;
