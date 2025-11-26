@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { VeoGenerator } from './components/VeoGenerator';
@@ -19,25 +18,41 @@ const App: React.FC = () => {
   // Initialize Data Store (Fetch from Firebase)
   useEffect(() => {
     const init = async () => {
-      await store.init();
-      const currentUser = store.getCurrentUser();
-      if (currentUser) {
-        setIsAuthenticated(true);
+      try {
+        await store.init();
+        const currentUser = store.getCurrentUser();
+        if (currentUser) {
+            setIsAuthenticated(true);
+        }
+        setAppSettings(store.getSettings());
+      } catch (error) {
+        console.error("Initialization error:", error);
+      } finally {
+        setIsInitializing(false);
       }
-      setAppSettings(store.getSettings());
-      setIsInitializing(false);
     };
     init();
   }, []);
 
-  // Fixed: Removed unused 'role' parameter
   const handleLogin = async () => {
     try {
         await store.loginWithGoogle();
         setIsAuthenticated(true);
         setCurrentView('dashboard');
-    } catch (e) {
-        alert("Login failed. Check console or make sure Firebase is configured.");
+    } catch (e: any) {
+        console.error("Login detailed error:", e);
+        // Show specific error to user
+        let message = "Login failed. ";
+        if (e.code === 'auth/unauthorized-domain') {
+            message += "This domain is not authorized in Firebase Console. Please add it to Authentication > Settings > Authorized Domains.";
+        } else if (e.code === 'auth/configuration-not-found') {
+            message += "Firebase configuration is missing. Check your Vercel Environment Variables.";
+        } else if (e.message) {
+            message += e.message;
+        } else {
+            message += "Check console for details.";
+        }
+        alert(message);
     }
   };
 
@@ -86,9 +101,15 @@ const App: React.FC = () => {
 
   if (isInitializing) {
       return (
-          <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
-              <span className="ml-3">Connecting to database...</span>
+          <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-600/10 rounded-full blur-[100px]"></div>
+              <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-600/10 rounded-full blur-[100px]"></div>
+              
+              <div className="relative z-10 flex flex-col items-center">
+                  <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mb-6"></div>
+                  <h2 className="text-xl font-semibold tracking-wide">Initializing App</h2>
+                  <p className="text-slate-500 text-sm mt-2">Connecting to secure database...</p>
+              </div>
           </div>
       );
   }

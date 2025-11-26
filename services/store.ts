@@ -62,9 +62,13 @@ let initialized = false;
 // Helpers to sync data
 const fetchSettings = async () => {
     try {
-        const docRef = doc(db, "config", "appSettings");
-        const snap = await getDoc(docRef);
-        if (snap.exists()) {
+        // Add a timeout to prevent hanging if DB is slow
+        const timeout = new Promise((_, reject) => setTimeout(() => reject("Timeout"), 3000));
+        const fetch = getDoc(doc(db, "config", "appSettings"));
+        
+        const snap: any = await Promise.race([fetch, timeout]);
+        
+        if (snap && snap.exists()) {
             const data = snap.data();
             settings = { 
                 ...defaultSettings, 
@@ -73,12 +77,12 @@ const fetchSettings = async () => {
                 apiKeys: { ...defaultSettings.apiKeys, ...(data.apiKeys || {}) },
                 branding: { ...defaultSettings.branding, ...(data.branding || {}) }
             } as AppSettings;
-        } else {
-            // Initialize DB with defaults
-            await setDoc(docRef, defaultSettings);
+        } else if (snap) {
+            // Initialize DB with defaults if doc is missing
+            await setDoc(doc(db, "config", "appSettings"), defaultSettings);
         }
     } catch (error) {
-        console.warn("Failed to fetch settings, using defaults", error);
+        console.warn("Settings fetch skipped or failed (using defaults):", error);
     }
 };
 
@@ -100,10 +104,12 @@ export const store = {
   init: () => new Promise<void>((resolve) => {
     if (initialized) return resolve();
     
-    // 1. Fetch Settings First (Fast, needed for branding)
-    fetchSettings().then(() => {
-        // 2. Listen for Auth State
-        onAuthStateChanged(auth, async (firebaseUser) => {
+    // OPTIMIZATION: Run fetchSettings and Auth Check in PARALLEL
+    const settingsPromise = fetchSettings();
+    
+    const authPromise = new Promise<void>((resolveAuth) => {
+        // onAuthStateChanged fires immediately with current state
+        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
             if (firebaseUser) {
                 // User is logged in, fetch their profile
                 const userRef = doc(db, "users", firebaseUser.uid);
@@ -113,11 +119,9 @@ export const store = {
                         currentUser = snap.data() as User;
                         
                         // Optimization: Only fetch ALL users if the logged-in user is Admin/Staff
-                        // This prevents downloading the whole DB for standard users
                         if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
                             await fetchUsers();
                         } else {
-                            // For standard users, just populate the cache with themselves so 'getUsers' doesn't crash
                             users = [currentUser];
                         }
                     }
@@ -127,10 +131,14 @@ export const store = {
             } else {
                 currentUser = null;
             }
-            
-            initialized = true;
-            resolve();
+            resolveAuth();
         });
+    });
+
+    // Wait for both to finish (or settings to timeout) before rendering app
+    Promise.all([settingsPromise, authPromise]).then(() => {
+        initialized = true;
+        resolve();
     });
   }),
 
@@ -146,16 +154,12 @@ export const store = {
 
         if (userSnap.exists()) {
             currentUser = userSnap.data() as User;
-            // If they are admin, fetch the rest of the users now
             if (['admin', 'editor', 'viewer'].includes(currentUser.role)) {
                 await fetchUsers();
             }
             return currentUser.role;
         } else {
             // Register new user
-            
-            // SECURITY FIX: Check DB directly if any users exist.
-            // (Memory cache 'users' might be empty if we loaded as guest)
             const q = query(collection(db, "users"), limit(1));
             const snapshot = await getDocs(q);
             const isFirstUser = snapshot.empty;
@@ -164,9 +168,9 @@ export const store = {
                 id: fbUser.uid,
                 name: fbUser.displayName || 'Unknown',
                 email: fbUser.email || '',
-                role: isFirstUser ? 'admin' : 'user', // First ever user is admin
+                role: isFirstUser ? 'admin' : 'user', 
                 plan: 'free',
-                credits: 5, // Free trial credits
+                credits: 5,
                 usedCredits: 0,
                 status: 'active',
                 avatar: fbUser.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${fbUser.uid}`
@@ -178,45 +182,39 @@ export const store = {
             return newUser.role;
         }
     } catch (error) {
-        console.error("Login failed", error);
         throw error;
     }
   },
 
   logout: async () => {
+    // Capture role BEFORE setting currentUser to null to avoid TypeScript error
+    const role = currentUser?.role;
+
     await firebaseSignOut(auth);
     currentUser = null;
-    // Clear sensitive data from memory on logout
-    if (!['admin', 'editor', 'viewer'].includes(currentUser?.role || '')) {
+    
+    // Clear sensitive data from memory on logout using captured role
+    if (!['admin', 'editor', 'viewer'].includes(role || '')) {
         users = [];
     }
   },
 
-  // --- Data Access (Sync Reads, Async Writes) ---
-
+  // --- Data Access ---
   getCurrentUser: () => currentUser,
-
   getUsers: () => [...users],
-
   getUser: (id: string) => users.find(u => u.id === id),
-
   updateUser: async (id: string, data: Partial<User>) => {
-    // Optimistic Update
     users = users.map(u => u.id === id ? { ...u, ...data } : u);
     if (currentUser?.id === id) {
         currentUser = { ...currentUser, ...data };
     }
-    
-    // DB Update
     const userRef = doc(db, "users", id);
     await updateDoc(userRef, data);
   },
-
   hasPermission: (permission: string): boolean => {
     if (!currentUser) return false;
     return PERMISSIONS[currentUser.role]?.includes(permission) || false;
   },
-
   deductCredit: async (userId: string) => {
     const user = users.find(u => u.id === userId);
     if (user) {
@@ -224,22 +222,16 @@ export const store = {
             credits: Math.max(0, user.credits - 1), 
             usedCredits: user.usedCredits + 1 
         };
-        // Optimistic
         users = users.map(u => u.id === userId ? { ...u, ...newData } : u);
         if (currentUser?.id === userId) {
             currentUser = { ...currentUser, ...newData };
         }
-        // DB
         await updateDoc(doc(db, "users", userId), newData);
     }
   },
-
   getTransactions: () => [...transactions],
-
   getSettings: () => ({ ...settings }),
-
   updateSettings: async (newSettings: Partial<AppSettings>) => {
-     // Optimistic
      settings = { 
         ...settings, 
         ...newSettings,
@@ -247,14 +239,10 @@ export const store = {
         branding: { ...settings.branding, ...(newSettings.branding || {}) },
         paymentMethods: { ...settings.paymentMethods, ...(newSettings.paymentMethods || {}) }
      };
-
-     // DB
      await setDoc(doc(db, "config", "appSettings"), settings);
      return settings;
   },
-
   getStats: () => {
-    // Simple calculations based on memory
     const totalRevenue = transactions.filter(t => t.status === 'completed').reduce((acc, curr) => acc + curr.amount, 0);
     const totalGenerations = users.reduce((acc, curr) => acc + curr.usedCredits, 0);
     return {
@@ -264,14 +252,11 @@ export const store = {
       totalGenerations
     };
   },
-
   getAnalytics: () => {
     const generationsByPlan = users.reduce((acc, user) => {
       acc[user.plan] = (acc[user.plan] || 0) + user.usedCredits;
       return acc;
     }, { free: 0, pro: 0, enterprise: 0 } as Record<string, number>);
-
-    // Mock time-series data
     const userGrowth = [
         { month: 'Jun', count: users.length > 10 ? Math.floor(users.length * 0.2) : 2 },
         { month: 'Jul', count: users.length > 10 ? Math.floor(users.length * 0.4) : 5 },
@@ -279,7 +264,6 @@ export const store = {
         { month: 'Sep', count: users.length > 10 ? Math.floor(users.length * 0.8) : 10 },
         { month: 'Oct', count: users.length },
     ];
-
     return {
         generationsByPlan,
         userGrowth,
